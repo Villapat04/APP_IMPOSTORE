@@ -88,5 +88,11 @@
     "seen": 1794426066.059344,
     "ast_hash": "386effa236d365997246298ee518904f",
     "semantic_hash": ""
+  },
+  "test/partite.test.js": {
+    "mtime": 1794434820.4644978,
+    "seen": 1794434934.9228363,
+    "ast_hash": "a34f40bce6d509ff7928aaf064b56be6",
+    "semantic_hash": ""
   }
 }
