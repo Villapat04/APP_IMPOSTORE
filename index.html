@@ -39,7 +39,7 @@
 
         .gioco-attivo h1#main_title { display: none; }
         #contenitore_parola { margin-top: 2vh; }
-        #testo_principale { font-size: 55px; font-weight: 900; color: white; text-transform: uppercase; text-shadow: 0 4px 10px rgba(0,0,0,0.3); margin: 0; line-height: 1.1; }
+        #testo_principale { font-size: min(55px, 11vw); overflow-wrap: anywhere; font-weight: 900; color: white; text-transform: uppercase; text-shadow: 0 4px 10px rgba(0,0,0,0.3); margin: 0; line-height: 1.1; }
         #testo_secondario { font-size: 20px; color: rgba(255,255,255,0.9); margin-top: 10px; text-transform: uppercase; letter-spacing: 2px; font-weight: 700; }
         
         #img_ruolo { width: 150px; height: 150px; object-fit: contain; background-color: white; padding: 15px; border-radius: 50%; border: 5px solid rgba(255,255,255,0.5); margin: 0 auto 15px auto; display: none; box-shadow: 0 15px 30px rgba(0,0,0,0.4); }
@@ -141,12 +141,30 @@
         <button onclick="esciDallaLobby()" style="background: rgba(255,255,255,0.2); border: 1px solid white; color: white;">Esci dalla Lobby</button>
     </div>
     
-    <script src="/socket.io/socket.io.js"></script> 
+    <script src="/socket.io/socket.io.js"></script>
     <script>
-        const socket = io(); 
+        // --- IDENTITÀ DEL GIOCATORE ---
+        // Un id stabile per scheda: se il telefono si blocca o la pagina si ricarica,
+        // il server ci riconosce e ci rimette nella stessa lobby (con lo stesso ruolo).
+        function leggiPlayerId() {
+            const CHIAVE = 'impostore_player_id';
+            let id = null;
+            try { id = sessionStorage.getItem(CHIAVE); } catch (e) {}
+            if (!id || !/^[A-Za-z0-9_-]{8,64}$/.test(id)) {
+                id = (window.crypto && crypto.randomUUID)
+                    ? crypto.randomUUID()
+                    : Date.now().toString(36) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+                id = id.replace(/[^A-Za-z0-9_-]/g, '');
+                try { sessionStorage.setItem(CHIAVE, id); } catch (e) {}
+            }
+            return id;
+        }
+
+        const socket = io({ auth: { playerId: leggiPlayerId() } });
         let codiceLobbyAttuale = "";
-        let isHost = false; 
-        let modalitaSelezionata = 'classica'; 
+        let isHost = false;
+        let modalitaSelezionata = 'classica';
+        let timerCountdown = null;
 
         function mostraSchermata(id) {
             document.querySelectorAll('body > div').forEach(div => {
@@ -154,27 +172,89 @@
             });
             document.getElementById(id).style.display = 'block';
             const titolo = document.getElementById('main_title');
-            if (id === 'schermata_gioco') { titolo.style.display = 'none'; } 
+            if (id === 'schermata_gioco') { titolo.style.display = 'none'; }
             else { titolo.style.display = 'block'; }
         }
 
-        function aggiornaLista(nomi) {
+        // Accetta sia { giocatori: [...] } sia la vecchia lista di nomi.
+        // Usa textContent: i nomi non vengono mai interpretati come HTML.
+        function aggiornaLista(dati) {
             const lista = document.getElementById('lista_giocatori');
             lista.innerHTML = '';
-            nomi.forEach((nome, index) => {
-                const icona = index === 0 ? '👑' : '👤'; 
-                lista.innerHTML += `<li><span style="margin-right:10px;">${icona}</span> ${nome}</li>`;
+            const giocatori = Array.isArray(dati)
+                ? dati.map((nome, i) => ({ nome, host: i === 0, connesso: true }))
+                : (dati.giocatori || (dati.listaNomi || []).map((nome, i) => ({ nome, host: i === 0, connesso: true })));
+
+            giocatori.forEach(g => {
+                const li = document.createElement('li');
+                const icona = document.createElement('span');
+                icona.style.marginRight = '10px';
+                icona.textContent = g.host ? '👑' : '👤';
+                li.appendChild(icona);
+                li.appendChild(document.createTextNode(' ' + g.nome + (g.connesso === false ? ' 💤' : '')));
+                lista.appendChild(li);
             });
         }
 
+        function impostaInfiltratoUI(attivo) {
+            const box = document.getElementById('opzione_infiltrato');
+            const status = document.getElementById('stato_infiltrato');
+            if (attivo) { box.classList.add('attivo'); status.innerText = '✅'; }
+            else { box.classList.remove('attivo'); status.innerText = '❌'; }
+        }
+
+        function nascondiCountdown() {
+            if (timerCountdown) { clearInterval(timerCountdown); timerCountdown = null; }
+            document.getElementById('overlay_countdown').style.display = 'none';
+        }
+
+        function nascondiElementiGioco() {
+            document.getElementById('btn_gioca_ancora').style.display = 'none';
+            document.getElementById('box_inizia_tu').style.display = 'none';
+            document.getElementById('img_ruolo').style.display = 'none';
+        }
+
+        // Mostra la lobby con i dati ricevuti dal server
+        function mostraLobby(dati) {
+            nascondiCountdown();
+            codiceLobbyAttuale = dati.codice;
+            if (typeof dati.isHost === 'boolean') isHost = dati.isHost;
+            if (dati.modalita) modalitaSelezionata = dati.modalita;
+            document.body.style.backgroundColor = '#ffffff';
+            mostraSchermata('schermata_crea');
+            nascondiElementiGioco();
+            document.getElementById('codice_lobby').innerText = dati.codice;
+            document.getElementById('tag_modalita').innerText = "MODALITÀ: " + String(dati.modalita || 'classica').toUpperCase();
+            impostaInfiltratoUI(!!dati.infiltratoAbilitato);
+            aggiornaLista(dati);
+            aggiornaInterfacciaHost();
+        }
+
+        function tornaAllaHome() {
+            nascondiCountdown();
+            codiceLobbyAttuale = "";
+            isHost = false;
+            document.body.style.backgroundColor = '#ffffff';
+            mostraSchermata('schermata_principale');
+            document.getElementById('codice_input').value = "";
+            nascondiElementiGioco();
+            impostaInfiltratoUI(false);
+            document.getElementById('lista_giocatori').innerHTML = '';
+            document.getElementById('btn_entra').disabled = false;
+        }
+
+        function leggiNome() {
+            return document.getElementById('input_nome').value.trim();
+        }
+
         function vaiAlMenuDiGioco(menuDestinazione, modalita) {
-            const nomeInput = document.getElementById('input_nome').value.trim();
+            const nomeInput = leggiNome();
             if (nomeInput === "") { alert("Scrivi il tuo nome!"); return; }
             socket.emit('imposta_nome', nomeInput);
-            modalitaSelezionata = modalita; 
+            modalitaSelezionata = modalita;
             mostraSchermata(menuDestinazione);
         }
-        
+
         function tornaAlMenuPrecedente() {
             if(modalitaSelezionata === 'clash') {
                 mostraSchermata('menu_modalita');
@@ -188,88 +268,55 @@
                 socket.emit('toggle_infiltrato', codiceLobbyAttuale);
             }
         }
-        
+
         function esciDallaLobby() {
             if (confirm("Vuoi davvero uscire?")) {
                 socket.emit('leave_lobby');
-                codiceLobbyAttuale = "";
-                isHost = false;
-                document.body.style.backgroundColor = '#ffffff';
-                mostraSchermata('schermata_principale');
-                document.getElementById('codice_input').value = "";
-                
-                document.getElementById('btn_gioca_ancora').style.display = 'none';
-                document.getElementById('box_inizia_tu').style.display = 'none';
-                document.getElementById('img_ruolo').style.display = 'none';
-                
-                // Riabilita il bottone entra
-                document.getElementById('btn_entra').disabled = false;
+                tornaAllaHome();
             }
         }
 
         socket.on('aggiorna_impostazioni', (dati) => {
-            const box = document.getElementById('opzione_infiltrato');
-            const status = document.getElementById('stato_infiltrato');
-            if (dati.infiltratoAbilitato) { box.classList.add('attivo'); status.innerText = '✅'; }
-            else { box.classList.remove('attivo'); status.innerText = '❌'; }
+            impostaInfiltratoUI(!!dati.infiltratoAbilitato);
         });
 
         function creaLobby(tipo) {
-            mostraSchermata('schermata_crea'); 
+            mostraSchermata('schermata_crea');
             document.getElementById('codice_lobby').innerText = '...';
-            socket.emit('create_lobby', tipo);
+            document.getElementById('lista_giocatori').innerHTML = '';
+            socket.emit('create_lobby', { modalita: tipo, nome: leggiNome() });
         }
 
         socket.on('lobby_creata', (dati) => {
-            if (dati.success) {
-                codiceLobbyAttuale = dati.codice;
-                isHost = dati.isHost; 
-                document.getElementById('codice_lobby').innerText = dati.codice;
-                document.getElementById('tag_modalita').innerText = "MODALITÀ: " + dati.modalita.toUpperCase();
-                aggiornaInterfacciaHost();
-                aggiornaLista(dati.listaNomi);
-                document.getElementById('opzione_infiltrato').classList.remove('attivo');
-                document.getElementById('stato_infiltrato').innerText = '❌';
-            }
+            if (dati.success) mostraLobby(dati);
         });
 
         function uniscitiAllaLobby() {
             const btn = document.getElementById('btn_entra');
-            const codice = document.getElementById('codice_input').value.toUpperCase();
-            
-            if (codice.length === 4) { 
+            const input = document.getElementById('codice_input');
+            const codice = input.value.toUpperCase().replace(/[^A-Z]/g, '');
+            input.value = codice;
+
+            if (codice.length === 4) {
                 btn.disabled = true; // Previene doppio click!
-                socket.emit('join_lobby', { 
-                    codice: codice,
-                    modalitaRichiesta: modalitaSelezionata 
-                }); 
+                socket.emit('join_lobby', { codice: codice, nome: leggiNome() });
                 // Riabilita il bottone dopo 3 secondi in caso di errore
                 setTimeout(() => { btn.disabled = false; }, 3000);
-            } 
+            }
             else { alert("Codice di 4 lettere richiesto"); }
         }
 
         socket.on('lobby_unita', (dati) => {
+            document.getElementById('btn_entra').disabled = false;
             if (dati.success) {
-                codiceLobbyAttuale = dati.codice;
-                isHost = dati.isHost; 
-                mostraSchermata('schermata_crea');
-                aggiornaInterfacciaHost();
-                document.getElementById('codice_lobby').innerText = dati.codice;
-                document.getElementById('tag_modalita').innerText = "MODALITÀ: " + dati.modalita.toUpperCase();
-                aggiornaLista(dati.listaNomi);
-                const box = document.getElementById('opzione_infiltrato');
-                const status = document.getElementById('stato_infiltrato');
-                if(dati.infiltratoAbilitato) { box.classList.add('attivo'); status.innerText = '✅'; }
-                else { box.classList.remove('attivo'); status.innerText = '❌'; }
+                mostraLobby(dati);
             } else {
                 alert(dati.messaggio);
-                document.getElementById('btn_entra').disabled = false;
             }
         });
 
         socket.on('giocatore_entrato', (dati) => {
-            aggiornaLista(dati.listaNomi);
+            aggiornaLista(dati);
         });
 
         socket.on('promozione_host', (dati) => {
@@ -278,6 +325,34 @@
                 alert("Il capo stanza è uscito. Ora sei tu l'HOST! 👑");
                 aggiornaInterfacciaHost();
             }
+        });
+
+        // Un giocatore ha lasciato la partita in corso
+        socket.on('giocatore_uscito', (dati) => {
+            if (document.getElementById('schermata_gioco').style.display !== 'block') return;
+            if (dati.eraImpostore) {
+                alert(`${dati.nome} (l'impostore) ha lasciato la partita.` + (isHost ? " Premi \"Gioca Ancora\" per ricominciare." : ""));
+            } else {
+                alert(`${dati.nome} ha lasciato la partita.`);
+            }
+        });
+
+        // Il server ci dice chi siamo e, se eravamo in una lobby, in che stato è
+        socket.on('sessione', (dati) => {
+            const stato = dati && dati.stato;
+            if (stato) {
+                mostraLobby(stato);
+                if (stato.status === 'playing' && stato.ruolo) mostraRuolo(stato.ruolo);
+            } else if (codiceLobbyAttuale) {
+                // Il server è stato riavviato: la lobby non esiste più
+                alert("La connessione al server si è interrotta e la lobby è stata chiusa. Creane una nuova!");
+                tornaAllaHome();
+            }
+        });
+
+        socket.on('sessione_sostituita', () => {
+            socket.disconnect();
+            alert("Hai aperto il gioco in un'altra scheda. Questa scheda è stata scollegata.");
         });
 
         function aggiornaInterfacciaHost() {
@@ -303,17 +378,18 @@
                 socket.emit('start_game', codiceLobbyAttuale);
             }
         }
-        
+
         // --- LOGICA COUNTDOWN ---
         socket.on('avvia_countdown', () => {
             const overlay = document.getElementById('overlay_countdown');
             const numero = document.getElementById('numero_countdown');
-            
+
+            if (timerCountdown) clearInterval(timerCountdown);
             overlay.style.display = 'flex';
             let count = 3;
             numero.innerText = count;
 
-            const timer = setInterval(() => {
+            timerCountdown = setInterval(() => {
                 count--;
                 if(count > 0) {
                     numero.innerText = count;
@@ -322,16 +398,29 @@
                     numero.offsetHeight; /* trigger reflow */
                     numero.style.animation = 'zoomIn 0.5s ease-out';
                 } else {
-                    clearInterval(timer);
+                    clearInterval(timerCountdown);
+                    timerCountdown = null;
                 }
             }, 1000);
         });
 
         socket.on('errore', (dati) => { alert("Errore: " + dati.messaggio); });
 
-        socket.on('partita_iniziata', (dati) => {
-            // Nascondi countdown
-            document.getElementById('overlay_countdown').style.display = 'none';
+        // Rimpicciolisce il testo finché la parola più lunga non sta nello schermo
+        // (così "Lavastoviglie" non viene spezzata a metà sui telefoni piccoli)
+        function adattaTesto(el) {
+            el.style.fontSize = '';
+            el.style.overflowWrap = 'normal';
+            let dimensione = parseFloat(getComputedStyle(el).fontSize);
+            while (el.scrollWidth > el.clientWidth && dimensione > 18) {
+                dimensione -= 2;
+                el.style.fontSize = dimensione + 'px';
+            }
+            el.style.overflowWrap = '';
+        }
+
+        function mostraRuolo(dati) {
+            nascondiCountdown();
 
             mostraSchermata('schermata_gioco');
             const principale = document.getElementById('testo_principale');
@@ -341,26 +430,29 @@
 
             principale.innerText = dati.testoPrincipale;
             secondario.innerText = dati.testoSecondario;
+            adattaTesto(principale);
             document.body.style.backgroundColor = dati.colore;
-            immagine.style.display = "inline-block"; 
-            
+            immagine.style.display = "inline-block";
+
             if (dati.tipoLogo === "impostore") {
-                immagine.src = "/logo_imposter.png"; 
-                immagine.style.border = "6px solid rgba(0,0,0,0.3)"; 
+                immagine.src = "/logo_imposter.png";
+                immagine.style.border = "6px solid rgba(0,0,0,0.3)";
             } else if (dati.tipoLogo === "infiltrato") {
-                immagine.src = "/logo_infiltrato.png"; 
+                immagine.src = "/logo_infiltrato.png";
                 immagine.style.border = "6px solid rgba(255,255,255,0.6)";
             } else {
-                immagine.src = "/logo_detective.png"; 
-                immagine.style.border = "6px solid rgba(255,255,255,0.6)"; 
+                immagine.src = "/logo_detective.png";
+                immagine.style.border = "6px solid rgba(255,255,255,0.6)";
             }
 
-            if (dati.iniziaTu === true) { boxInizia.style.display = 'block'; } 
+            if (dati.iniziaTu === true) { boxInizia.style.display = 'block'; }
             else { boxInizia.style.display = 'none'; }
-            
-            aggiornaInterfacciaHost(); 
-        });
-        
+
+            aggiornaInterfacciaHost();
+        }
+
+        socket.on('partita_iniziata', mostraRuolo);
+
         function resetLobby() {
             if (codiceLobbyAttuale && isHost) {
                 socket.emit('reset_lobby', codiceLobbyAttuale);
@@ -368,22 +460,22 @@
         }
 
         socket.on('torna_alla_lobby', (dati) => {
-            mostraSchermata('schermata_crea');
-            document.body.style.backgroundColor = '#ffffff';
-            aggiornaLista(dati.listaNomi);
-            document.getElementById('tag_modalita').innerText = "MODALITÀ: " + dati.modalita.toUpperCase();
-            
-            const box = document.getElementById('opzione_infiltrato');
-            const status = document.getElementById('stato_infiltrato');
-            if(dati.infiltratoAbilitato) { box.classList.add('attivo'); status.innerText = '✅'; }
-            else { box.classList.remove('attivo'); status.innerText = '❌'; }
-            
-            document.getElementById('box_inizia_tu').style.display = 'none';
+            mostraLobby(dati);
         });
 
         document.addEventListener('DOMContentLoaded', () => {
-            mostraSchermata('schermata_principale');
+            // Se il ripristino della sessione ha già mostrato una lobby, non tornare alla home
+            if (!codiceLobbyAttuale) mostraSchermata('schermata_principale');
         });
-    </script> 
+
+        // --- PWA: registra il service worker (installabile e più veloce da riaprire) ---
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/service-worker.js').catch(err => {
+                    console.warn('Service worker non registrato:', err);
+                });
+            });
+        }
+    </script>
 </body>
 </html>

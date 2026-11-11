@@ -1,21 +1,29 @@
 {
-  "name": "gioco",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "trova-l-impostore",
+  "version": "1.1.0",
+  "description": "Gioco multiplayer 'Trova l'Impostore' (modalità Classica e Clash Royale) con Express e Socket.IO",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test"
   },
-  "keywords": [],
+  "keywords": [
+    "gioco",
+    "impostore",
+    "socket.io",
+    "party-game"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "engines": {
-  "node": ">=18.0.0"
-},
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "express": "^5.1.0",
     "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.1"
   }
 }

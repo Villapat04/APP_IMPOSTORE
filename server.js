@@ -1,279 +1,472 @@
 const express = require('express');
 const http = require('http');
-const { Server } = require("socket.io");
-const fs = require('fs'); 
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const { Server } = require('socket.io');
 
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
-
-app.use(express.static('public')); 
+// --- CONFIGURAZIONE ---
+const MODALITA_VALIDE = ['classica', 'clash'];
+const MAX_GIOCATORI_PER_STANZA = 20;
+const MAX_STANZE = 2000;
+const LUNGHEZZA_MAX_NOME = 12;
 
 // --- CARICAMENTO DATABASE ---
-let dbClassico = [];
-let dbClash = [];
-
-try {
-    const dataClassico = fs.readFileSync('words.json');
-    dbClassico = JSON.parse(dataClassico);
-    const dataClash = fs.readFileSync('words_clash.json');
-    dbClash = JSON.parse(dataClash);
-    console.log(`[SERVER] Caricate ${dbClassico.length} parole Classiche e ${dbClash.length} Clash.`);
-} catch (e) {
-    console.error("[ERRORE DB] Uso fallback.");
-    dbClassico = [{ parola: "Pizza", infiltrato: ["Pasta"] }];
-    dbClash = [{ parola: "Gigante", infiltrato: ["Golem"] }];
-}
-
-let stanze = {}; 
-let giocatoriConnessi = {}; 
-
-function generaNomeCasuale() {
-    const nomi = ["Squalo", "Tigre", "Drago", "Ninja", "Fantasma", "Alieno", "Pirata", "Orso", "Falco"];
-    const aggettivi = ["Rosso", "Blu", "Verde", "Veloce", "Magico", "Freddo", "Grande", "Piccolo"];
-    return `${aggettivi[Math.floor(Math.random() * aggettivi.length)]} ${nomi[Math.floor(Math.random() * nomi.length)]}`;
-}
-
-function generaCodice() {
-    const caratteri = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    let codice = '';
-    do {
-        codice = '';
-        for (let i = 0; i < 4; i++) {
-            codice += caratteri.charAt(Math.floor(Math.random() * caratteri.length));
-        }
-    } while (stanze[codice]); 
-    return codice;
-}
-
-function gestisciUscitaGiocatore(socketId) {
-    const codiceLobby = giocatoriConnessi[socketId];
-    if (!codiceLobby) return;
-
-    let stanza = stanze[codiceLobby];
-    if (stanza) {
-        const playerIndex = stanza.giocatori.findIndex(p => p.id === socketId);
-        const isHostLeaving = (stanza.hostId === socketId);
-
-        if (playerIndex !== -1) {
-            stanza.giocatori.splice(playerIndex, 1);
-            delete giocatoriConnessi[socketId];
-
-            if (stanza.giocatori.length === 0) {
-                delete stanze[codiceLobby];
-            } else {
-                if (isHostLeaving) {
-                    stanza.hostId = stanza.giocatori[0].id; 
-                    io.to(stanza.hostId).emit('promozione_host', { isHost: true });
-                }
-                io.to(codiceLobby).emit('giocatore_entrato', { 
-                    listaNomi: stanza.giocatori.map(p => p.nome),
-                    hostId: stanza.hostId 
-                });
-            }
-        }
+// Ogni file viene caricato separatamente: se uno è rotto, l'altro continua a funzionare.
+function caricaParole(nomeFile, fallback) {
+    try {
+        const dati = JSON.parse(fs.readFileSync(path.join(__dirname, nomeFile), 'utf8'));
+        if (!Array.isArray(dati)) throw new Error('il file non contiene una lista');
+        const valide = dati.filter(c =>
+            c && typeof c.parola === 'string' && c.parola.trim() &&
+            Array.isArray(c.infiltrato) &&
+            c.infiltrato.some(p => typeof p === 'string' && p.trim())
+        ).map(c => ({
+            parola: c.parola.trim(),
+            infiltrato: c.infiltrato.filter(p => typeof p === 'string' && p.trim()).map(p => p.trim())
+        }));
+        if (valide.length === 0) throw new Error('nessuna parola valida');
+        return valide;
+    } catch (e) {
+        console.error(`[ERRORE DB] ${nomeFile}: ${e.message}. Uso fallback.`);
+        return fallback;
     }
 }
 
-app.get('/', (req, res) => { res.sendFile(__dirname + '/index.html'); });
+// --- FUNZIONI DI SUPPORTO (pure, testabili) ---
+function generaNomeCasuale() {
+    const nomi = ["Squalo", "Tigre", "Drago", "Ninja", "Fantasma", "Alieno", "Pirata", "Orso", "Falco"];
+    const aggettivi = ["Rosso", "Blu", "Verde", "Veloce", "Magico", "Freddo", "Grande", "Piccolo"];
+    let nome;
+    // Rigenera finché il nome sta nel limite, così non viene mai troncato a metà parola
+    do {
+        nome = `${nomi[Math.floor(Math.random() * nomi.length)]} ${aggettivi[Math.floor(Math.random() * aggettivi.length)]}`;
+    } while (nome.length > LUNGHEZZA_MAX_NOME);
+    return nome;
+}
 
-io.on('connection', (socket) => {
-    socket.data.nome = generaNomeCasuale();
-    
-    socket.on('imposta_nome', (nuovoNome) => {
-        if(nuovoNome && typeof nuovoNome === 'string' && nuovoNome.trim().length > 0) { 
-            socket.data.nome = nuovoNome.trim().substring(0, 12); 
+function pulisciNome(valore) {
+    if (typeof valore !== 'string') return null;
+    // Rimuove caratteri di controllo e spazi multipli
+    const nome = valore.replace(/[\u0000-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim().substring(0, LUNGHEZZA_MAX_NOME).trim();
+    return nome.length > 0 ? nome : null;
+}
+
+function pulisciCodice(valore) {
+    if (typeof valore !== 'string') return null;
+    const codice = valore.trim().toUpperCase();
+    return /^[A-Z]{4}$/.test(codice) ? codice : null;
+}
+
+function pulisciModalita(valore) {
+    return MODALITA_VALIDE.includes(valore) ? valore : 'classica';
+}
+
+function idGiocatoreValido(valore) {
+    return typeof valore === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(valore);
+}
+
+// Sceglie una carta non ancora uscita in questa stanza; quando le ha usate tutte ricomincia.
+function scegliCarta(database, usate) {
+    if (usate.size >= database.length) usate.clear();
+    const disponibili = [];
+    for (let i = 0; i < database.length; i++) if (!usate.has(i)) disponibili.push(i);
+    const indice = disponibili[Math.floor(Math.random() * disponibili.length)];
+    usate.add(indice);
+    return database[indice];
+}
+
+// Assegna ruoli: un impostore, opzionalmente un infiltrato, il resto civili.
+// Chi inizia è pesato: impostore 1 biglietto, infiltrato 3, civili 5.
+function assegnaRuoli(numeroGiocatori, infiltratoAbilitato, carta) {
+    const indici = [...Array(numeroGiocatori).keys()];
+    const indiceImpostore = indici.splice(Math.floor(Math.random() * indici.length), 1)[0];
+
+    let indiceInfiltrato = -1;
+    // Serve almeno un civile oltre all'infiltrato, altrimenti il ruolo non ha senso
+    if (infiltratoAbilitato && indici.length >= 2) {
+        indiceInfiltrato = indici.splice(Math.floor(Math.random() * indici.length), 1)[0];
+    }
+
+    const biglietti = [];
+    for (let i = 0; i < numeroGiocatori; i++) {
+        const quanti = i === indiceImpostore ? 1 : (i === indiceInfiltrato ? 3 : 5);
+        for (let k = 0; k < quanti; k++) biglietti.push(i);
+    }
+    const indiceChiInizia = biglietti[Math.floor(Math.random() * biglietti.length)];
+
+    const parolaCivile = carta.parola;
+    const parolaInfiltrato = carta.infiltrato[Math.floor(Math.random() * carta.infiltrato.length)];
+
+    const ruoli = [];
+    for (let i = 0; i < numeroGiocatori; i++) {
+        const dati = { iniziaTu: i === indiceChiInizia };
+        if (i === indiceImpostore) {
+            Object.assign(dati, { ruolo: "IMPOSTORE", testoPrincipale: "SEI L'IMPOSTORE", testoSecondario: "Non farti scoprire!", colore: "#d32f2f", tipoLogo: "impostore" });
+        } else if (i === indiceInfiltrato) {
+            Object.assign(dati, { ruolo: "INFILTRATO", testoPrincipale: parolaInfiltrato, testoSecondario: "Parola dell'Infiltrato", colore: "#fbc02d", tipoLogo: "infiltrato" });
+        } else {
+            Object.assign(dati, { ruolo: "CIVILE", testoPrincipale: parolaCivile, testoSecondario: "Parola Segreta", colore: "#2e7d32", tipoLogo: "detective" });
         }
+        ruoli.push(dati);
+    }
+    return ruoli;
+}
+
+// --- SERVER ---
+function creaServer(opzioni = {}) {
+    const graceMs = opzioni.graceMs ?? Number(process.env.GRACE_MS || 60000);
+    const countdownMs = opzioni.countdownMs ?? Number(process.env.COUNTDOWN_MS || 3500);
+    const dbClassico = opzioni.dbClassico || caricaParole('words.json', [{ parola: "Pizza", infiltrato: ["Pasta"] }]);
+    const dbClash = opzioni.dbClash || caricaParole('words_clash.json', [{ parola: "Gigante", infiltrato: ["Golem"] }]);
+    const log = opzioni.silenzioso ? () => {} : console.log;
+
+    log(`[SERVER] Caricate ${dbClassico.length} parole Classiche e ${dbClash.length} Clash.`);
+
+    const app = express();
+    const server = http.createServer(app);
+    const io = new Server(server);
+
+    // Endpoint leggero per UptimeRobot: non scarica la pagina intera
+    app.get('/health', (req, res) => {
+        res.set('Cache-Control', 'no-store');
+        res.type('text/plain').send('ok');
     });
 
-    socket.on('create_lobby', (tipoPartita) => {
-        // Se il giocatore è già in una stanza, lo rimuoviamo prima
-        if(giocatoriConnessi[socket.id]) gestisciUscitaGiocatore(socket.id);
+    app.get(['/', '/index.html'], (req, res) => {
+        res.set('Cache-Control', 'no-cache');
+        res.sendFile(path.join(__dirname, 'index.html'));
+    });
 
-        const nuovoCodice = generaCodice();
-        const nomeHost = socket.data.nome;
-        const modalita = tipoPartita || 'classica';
-        
-        stanze[nuovoCodice] = {
-            hostId: socket.id,
-            codice: nuovoCodice,
-            giocatori: [{ id: socket.id, nome: nomeHost }],
-            status: 'waiting',
-            infiltratoAbilitato: false,
-            modalita: modalita
+    app.use(express.static(path.join(__dirname, 'public'), {
+        setHeaders: (res, filePath) => {
+            // Il service worker deve essere sempre ricontrollato, altrimenti gli aggiornamenti non arrivano
+            if (filePath.endsWith('service-worker.js')) res.set('Cache-Control', 'no-cache');
+        }
+    }));
+
+    const stanze = {};          // codice -> stanza
+    const stanzaDi = {};        // playerId -> codice
+
+    function generaCodice() {
+        const caratteri = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        let codice;
+        do {
+            codice = '';
+            for (let i = 0; i < 4; i++) codice += caratteri.charAt(Math.floor(Math.random() * caratteri.length));
+        } while (stanze[codice]);
+        return codice;
+    }
+
+    function nomeUnico(stanza, nome, escludiId) {
+        const usati = new Set(stanza.giocatori.filter(g => g.id !== escludiId).map(g => g.nome.toLowerCase()));
+        if (!usati.has(nome.toLowerCase())) return nome;
+        const base = nome.substring(0, LUNGHEZZA_MAX_NOME - 3).trim();
+        for (let n = 2; ; n++) {
+            const candidato = `${base} ${n}`;
+            if (!usati.has(candidato.toLowerCase())) return candidato;
+        }
+    }
+
+    function datiLista(stanza) {
+        return {
+            listaNomi: stanza.giocatori.map(g => g.nome),
+            giocatori: stanza.giocatori.map(g => ({ nome: g.nome, host: g.id === stanza.hostId, connesso: g.connesso })),
+            hostIndex: stanza.giocatori.findIndex(g => g.id === stanza.hostId)
         };
-        
-        socket.join(nuovoCodice);
-        giocatoriConnessi[socket.id] = nuovoCodice;
+    }
 
-        socket.emit('lobby_creata', {
-            success: true,
-            codice: nuovoCodice,
-            listaNomi: [nomeHost],
-            isHost: true,
-            infiltratoAbilitato: false,
-            modalita: modalita
+    function inviaLista(stanza) {
+        io.to(stanza.codice).emit('giocatore_entrato', datiLista(stanza));
+    }
+
+    function statoPer(stanza, playerId) {
+        return {
+            codice: stanza.codice,
+            modalita: stanza.modalita,
+            infiltratoAbilitato: stanza.infiltratoAbilitato,
+            isHost: stanza.hostId === playerId,
+            status: stanza.status,
+            ruolo: stanza.status === 'playing' ? (stanza.ruoli[playerId] || null) : null,
+            ...datiLista(stanza)
+        };
+    }
+
+    function stanzaDelGiocatore(playerId) {
+        const codice = stanzaDi[playerId];
+        return codice ? stanze[codice] : null;
+    }
+
+    function annullaCountdown(stanza) {
+        if (stanza.timerCountdown) clearTimeout(stanza.timerCountdown);
+        stanza.timerCountdown = null;
+    }
+
+    function tornaInLobby(stanza) {
+        annullaCountdown(stanza);
+        stanza.status = 'waiting';
+        stanza.ruoli = {};
+        io.to(stanza.codice).emit('torna_alla_lobby', {
+            codice: stanza.codice,
+            infiltratoAbilitato: stanza.infiltratoAbilitato,
+            modalita: stanza.modalita,
+            ...datiLista(stanza)
         });
-    });
-    
-    socket.on('toggle_infiltrato', (codiceLobby) => {
-        const stanza = stanze[codiceLobby];
-        if(stanza && stanza.hostId === socket.id) {
-            stanza.infiltratoAbilitato = !stanza.infiltratoAbilitato;
-            io.to(codiceLobby).emit('aggiorna_impostazioni', { infiltratoAbilitato: stanza.infiltratoAbilitato });
-        }
-    });
+    }
 
-    socket.on('join_lobby', (dati) => {
-        const codice = dati.codice;
-        const modalitaUtente = dati.modalitaRichiesta; 
-        const nomeOspite = socket.data.nome; 
-        
-        if (!stanze[codice]) {
-            socket.emit('lobby_unita', { success: false, messaggio: 'Codice non trovato!' });
+    function rimuoviGiocatore(playerId) {
+        const stanza = stanzaDelGiocatore(playerId);
+        delete stanzaDi[playerId];
+        if (!stanza) return;
+
+        const indice = stanza.giocatori.findIndex(g => g.id === playerId);
+        if (indice === -1) return;
+        const [giocatore] = stanza.giocatori.splice(indice, 1);
+        if (giocatore.timerUscita) clearTimeout(giocatore.timerUscita);
+
+        const socketVecchio = giocatore.socketId && io.sockets.sockets.get(giocatore.socketId);
+        if (socketVecchio) socketVecchio.leave(stanza.codice);
+
+        if (stanza.giocatori.length === 0) {
+            annullaCountdown(stanza);
+            delete stanze[stanza.codice];
             return;
         }
 
-        // --- FIX DUPLICATI ---
-        // Controlliamo se questo socket ID è già nella lista dei giocatori
-        const giocatoreGiaPresente = stanze[codice].giocatori.find(p => p.id === socket.id);
-        if (giocatoreGiaPresente) {
-            // Se è già dentro, rimandiamo solo l'evento di successo senza aggiungerlo di nuovo
-            socket.emit('lobby_unita', { 
-                success: true, 
-                codice: codice, 
-                listaNomi: stanze[codice].giocatori.map(p => p.nome),
-                isHost: false,
-                infiltratoAbilitato: stanze[codice].infiltratoAbilitato,
-                modalita: stanze[codice].modalita
+        if (stanza.hostId === playerId) {
+            // Il nuovo host è il primo giocatore connesso (o il primo in lista)
+            const nuovoHost = stanza.giocatori.find(g => g.connesso) || stanza.giocatori[0];
+            stanza.hostId = nuovoHost.id;
+            if (nuovoHost.connesso) io.to(nuovoHost.socketId).emit('promozione_host', { isHost: true });
+        }
+
+        if (stanza.status !== 'waiting') {
+            io.to(stanza.codice).emit('giocatore_uscito', {
+                nome: giocatore.nome,
+                eraImpostore: stanza.ruoli[playerId]?.ruolo === 'IMPOSTORE'
             });
-            return;
-        }
-        
-        if (stanze[codice].modalita !== modalitaUtente) {
-            socket.emit('lobby_unita', { success: false, messaggio: `Errore modalità.` });
-            return;
-        }
-
-        if (stanze[codice].status === 'playing') {
-            socket.emit('lobby_unita', { success: false, messaggio: 'Partita già in corso!' });
-            return;
+            delete stanza.ruoli[playerId];
+            // Se durante il countdown restano troppo pochi giocatori, si torna in lobby
+            if (stanza.status === 'countdown' && stanza.giocatori.length < 2) {
+                tornaInLobby(stanza);
+                io.to(stanza.codice).emit('errore', { messaggio: 'Troppi giocatori sono usciti, partita annullata.' });
+            }
         }
 
-        // Se era in un'altra lobby, toglilo da lì
-        if(giocatoriConnessi[socket.id]) gestisciUscitaGiocatore(socket.id);
+        inviaLista(stanza);
+    }
 
-        const nuovoGiocatore = { id: socket.id, nome: nomeOspite };
-        stanze[codice].giocatori.push(nuovoGiocatore);
-        
-        socket.join(codice);
-        giocatoriConnessi[socket.id] = codice;
+    function avviaRuoli(stanza) {
+        stanza.timerCountdown = null;
+        if (stanze[stanza.codice] !== stanza || stanza.status !== 'countdown') return;
+        if (stanza.giocatori.length < 2) {
+            tornaInLobby(stanza);
+            return;
+        }
 
-        const listaGiocatori = stanze[codice].giocatori.map(p => p.nome);
-        
-        socket.emit('lobby_unita', { 
-            success: true, 
-            codice: codice, 
-            listaNomi: listaGiocatori,
-            isHost: false,
-            infiltratoAbilitato: stanze[codice].infiltratoAbilitato,
-            modalita: stanze[codice].modalita
+        const database = stanza.modalita === 'clash' ? dbClash : dbClassico;
+        const usate = stanza.paroleUsate[stanza.modalita];
+        const carta = scegliCarta(database, usate);
+        const ruoli = assegnaRuoli(stanza.giocatori.length, stanza.infiltratoAbilitato, carta);
+
+        stanza.status = 'playing';
+        stanza.ruoli = {};
+        stanza.giocatori.forEach((g, i) => {
+            stanza.ruoli[g.id] = ruoli[i];
+            if (g.connesso) io.to(g.socketId).emit('partita_iniziata', ruoli[i]);
+        });
+    }
+
+    io.on('connection', (socket) => {
+        const auth = socket.handshake.auth || {};
+        const playerId = idGiocatoreValido(auth.playerId) ? auth.playerId : crypto.randomUUID();
+        socket.data.playerId = playerId;
+        socket.data.nome = pulisciNome(auth.nome) || generaNomeCasuale();
+
+        // Registra un handler che non può far crashare il server
+        const on = (evento, gestore) => {
+            socket.on(evento, (...args) => {
+                try {
+                    gestore(...args);
+                } catch (e) {
+                    console.error(`[ERRORE] evento "${evento}":`, e);
+                }
+            });
+        };
+
+        // --- RIPRISTINO SESSIONE (telefono bloccato, rete persa, pagina ricaricata) ---
+        const stanzaEsistente = stanzaDelGiocatore(playerId);
+        const giocatoreEsistente = stanzaEsistente && stanzaEsistente.giocatori.find(g => g.id === playerId);
+        if (giocatoreEsistente) {
+            if (giocatoreEsistente.socketId && giocatoreEsistente.socketId !== socket.id) {
+                const vecchio = io.sockets.sockets.get(giocatoreEsistente.socketId);
+                if (vecchio) {
+                    vecchio.data.sostituito = true;
+                    vecchio.leave(stanzaEsistente.codice);
+                    vecchio.emit('sessione_sostituita');
+                }
+            }
+            if (giocatoreEsistente.timerUscita) clearTimeout(giocatoreEsistente.timerUscita);
+            giocatoreEsistente.timerUscita = null;
+            giocatoreEsistente.socketId = socket.id;
+            giocatoreEsistente.connesso = true;
+            socket.data.nome = giocatoreEsistente.nome;
+            socket.join(stanzaEsistente.codice);
+            socket.emit('sessione', { playerId, stato: statoPer(stanzaEsistente, playerId) });
+            socket.to(stanzaEsistente.codice).emit('giocatore_entrato', datiLista(stanzaEsistente));
+        } else {
+            socket.emit('sessione', { playerId, stato: null });
+        }
+
+        on('imposta_nome', (nuovoNome) => {
+            const nome = pulisciNome(nuovoNome);
+            if (nome) socket.data.nome = nome;
         });
 
-        socket.to(codice).emit('giocatore_entrato', { listaNomi: listaGiocatori });
-    });
+        on('create_lobby', (dati) => {
+            // Accetta sia la vecchia forma ('classica') sia { modalita, nome }
+            const opzioni = (dati && typeof dati === 'object') ? dati : { modalita: dati };
+            const nome = pulisciNome(opzioni.nome);
+            if (nome) socket.data.nome = nome;
 
-    socket.on('start_game', (codiceLobby) => {
-        const stanza = stanze[codiceLobby];
-        if (!stanza || stanza.hostId !== socket.id) return;
-
-        const minGiocatori = stanza.infiltratoAbilitato ? 3 : 2; 
-        if (stanza.giocatori.length < minGiocatori) return;
-        
-        stanza.status = 'playing';
-
-        // --- FASE 1: AVVIA IL COUNTDOWN ---
-        io.to(codiceLobby).emit('avvia_countdown');
-
-        // --- FASE 2: CALCOLA E INVIA RUOLI DOPO 3.5 SECONDI ---
-        setTimeout(() => {
-            let databaseScelto = dbClassico;
-            if (stanza.modalita === 'clash') databaseScelto = dbClash;
-            if(databaseScelto.length === 0) databaseScelto = [{parola: "ERRORE", infiltrato: ["VUOTO"]}];
-
-            const carta = databaseScelto[Math.floor(Math.random() * databaseScelto.length)];
-            const parolaCivile = carta.parola;
-            const parolaInfiltrato = carta.infiltrato[Math.floor(Math.random() * carta.infiltrato.length)];
-
-            let indici = [...Array(stanza.giocatori.length).keys()]; 
-            const randImp = Math.floor(Math.random() * indici.length);
-            const indiceImpostore = indici.splice(randImp, 1)[0];
-            
-            let indiceInfiltrato = -1;
-            if (stanza.infiltratoAbilitato && indici.length > 0) {
-                const randInf = Math.floor(Math.random() * indici.length);
-                indiceInfiltrato = indici.splice(randInf, 1)[0];
+            if (Object.keys(stanze).length >= MAX_STANZE) {
+                socket.emit('errore', { messaggio: 'Server pieno, riprova tra poco.' });
+                return;
             }
 
-            let biglietti = [];
-            stanza.giocatori.forEach((g, i) => {
-                if (i === indiceImpostore) biglietti.push(i);
-                else if (i === indiceInfiltrato) for(let k=0; k<3; k++) biglietti.push(i);
-                else for(let k=0; k<5; k++) biglietti.push(i);
+            if (stanzaDi[playerId]) rimuoviGiocatore(playerId);
+
+            const codice = generaCodice();
+            const modalita = pulisciModalita(opzioni.modalita);
+            const stanza = {
+                codice,
+                hostId: playerId,
+                giocatori: [{ id: playerId, nome: socket.data.nome, socketId: socket.id, connesso: true, timerUscita: null }],
+                status: 'waiting',
+                infiltratoAbilitato: false,
+                modalita,
+                paroleUsate: { classica: new Set(), clash: new Set() },
+                ruoli: {},
+                timerCountdown: null
+            };
+            stanze[codice] = stanza;
+            stanzaDi[playerId] = codice;
+            socket.join(codice);
+
+            socket.emit('lobby_creata', {
+                success: true,
+                codice,
+                isHost: true,
+                infiltratoAbilitato: false,
+                modalita,
+                ...datiLista(stanza)
             });
-            const indiceChiInizia = biglietti[Math.floor(Math.random() * biglietti.length)];
+        });
 
-            stanza.giocatori.forEach((giocatore, index) => {
-                const toccaATe = (index === indiceChiInizia);
-                let datiPartita = { iniziaTu: toccaATe };
+        on('toggle_infiltrato', () => {
+            const stanza = stanzaDelGiocatore(playerId);
+            if (!stanza || stanza.hostId !== playerId || stanza.status !== 'waiting') return;
+            stanza.infiltratoAbilitato = !stanza.infiltratoAbilitato;
+            io.to(stanza.codice).emit('aggiorna_impostazioni', { infiltratoAbilitato: stanza.infiltratoAbilitato });
+        });
 
-                if (index === indiceImpostore) {
-                    datiPartita.ruolo = "IMPOSTORE";
-                    datiPartita.testoPrincipale = "SEI L'IMPOSTORE";
-                    datiPartita.testoSecondario = "Non farti scoprire!";
-                    datiPartita.colore = "#d32f2f"; 
-                    datiPartita.tipoLogo = "impostore"; 
-                } else if (index === indiceInfiltrato) {
-                    datiPartita.ruolo = "INFILTRATO";
-                    datiPartita.testoPrincipale = parolaInfiltrato;
-                    datiPartita.testoSecondario = "Parola dell'Infiltrato";
-                    datiPartita.colore = "#fbc02d"; 
-                    datiPartita.tipoLogo = "infiltrato"; 
-                } else {
-                    datiPartita.ruolo = "CIVILE";
-                    datiPartita.testoPrincipale = parolaCivile;
-                    datiPartita.testoSecondario = "Parola Segreta";
-                    datiPartita.colore = "#2e7d32"; 
-                    datiPartita.tipoLogo = "detective"; 
-                }
-                io.to(giocatore.id).emit('partita_iniziata', datiPartita);
-            });
-        }, 3500); // 3500ms = 3.5 secondi di attesa prima di mostrare i ruoli
+        on('join_lobby', (dati) => {
+            const opzioni = (dati && typeof dati === 'object') ? dati : { codice: dati };
+            const codice = pulisciCodice(opzioni.codice);
+            const nome = pulisciNome(opzioni.nome);
+            if (nome) socket.data.nome = nome;
+
+            if (!codice) {
+                socket.emit('lobby_unita', { success: false, messaggio: 'Codice non valido!' });
+                return;
+            }
+            const stanza = stanze[codice];
+            if (!stanza) {
+                socket.emit('lobby_unita', { success: false, messaggio: 'Codice non trovato!' });
+                return;
+            }
+
+            // Già dentro (doppio click o ripristino): rimanda solo lo stato
+            if (stanza.giocatori.some(g => g.id === playerId)) {
+                socket.join(codice);
+                socket.emit('lobby_unita', { success: true, ...statoPer(stanza, playerId) });
+                return;
+            }
+
+            if (stanza.status !== 'waiting') {
+                socket.emit('lobby_unita', { success: false, messaggio: 'Partita già in corso!' });
+                return;
+            }
+            if (stanza.giocatori.length >= MAX_GIOCATORI_PER_STANZA) {
+                socket.emit('lobby_unita', { success: false, messaggio: 'Lobby piena!' });
+                return;
+            }
+
+            if (stanzaDi[playerId]) rimuoviGiocatore(playerId);
+
+            const nomeFinale = nomeUnico(stanza, socket.data.nome, playerId);
+            stanza.giocatori.push({ id: playerId, nome: nomeFinale, socketId: socket.id, connesso: true, timerUscita: null });
+            stanzaDi[playerId] = codice;
+            socket.join(codice);
+
+            socket.emit('lobby_unita', { success: true, ...statoPer(stanza, playerId) });
+            socket.to(codice).emit('giocatore_entrato', datiLista(stanza));
+        });
+
+        on('start_game', () => {
+            const stanza = stanzaDelGiocatore(playerId);
+            if (!stanza || stanza.hostId !== playerId) return;
+            if (stanza.status !== 'waiting') return; // blocca il doppio avvio
+
+            const minGiocatori = stanza.infiltratoAbilitato ? 3 : 2;
+            if (stanza.giocatori.length < minGiocatori) {
+                socket.emit('errore', { messaggio: `Servono almeno ${minGiocatori} giocatori per iniziare.` });
+                return;
+            }
+
+            stanza.status = 'countdown';
+            io.to(stanza.codice).emit('avvia_countdown');
+            stanza.timerCountdown = setTimeout(() => {
+                try { avviaRuoli(stanza); } catch (e) { console.error('[ERRORE] avvio ruoli:', e); }
+            }, countdownMs);
+        });
+
+        on('reset_lobby', () => {
+            const stanza = stanzaDelGiocatore(playerId);
+            if (!stanza || stanza.hostId !== playerId || stanza.status === 'waiting') return;
+            tornaInLobby(stanza);
+        });
+
+        on('leave_lobby', () => {
+            if (stanzaDi[playerId]) rimuoviGiocatore(playerId);
+        });
+
+        on('disconnect', () => {
+            if (socket.data.sostituito) return;
+            const stanza = stanzaDelGiocatore(playerId);
+            const giocatore = stanza && stanza.giocatori.find(g => g.id === playerId);
+            if (!giocatore || giocatore.socketId !== socket.id) return;
+
+            // Non lo togliamo subito: può essere solo il telefono bloccato.
+            giocatore.connesso = false;
+            inviaLista(stanza);
+            giocatore.timerUscita = setTimeout(() => {
+                try {
+                    if (!giocatore.connesso) rimuoviGiocatore(playerId);
+                } catch (e) { console.error('[ERRORE] rimozione giocatore:', e); }
+            }, graceMs);
+        });
     });
 
-    socket.on('reset_lobby', (codiceLobby) => {
-        const stanza = stanze[codiceLobby];
-        if (stanza && stanza.hostId === socket.id) {
-            stanza.status = 'waiting';
-            io.to(codiceLobby).emit('torna_alla_lobby', {
-                codice: codiceLobby,
-                listaNomi: stanza.giocatori.map(p => p.nome),
-                infiltratoAbilitato: stanza.infiltratoAbilitato,
-                modalita: stanza.modalita
-            });
-        }
-    });
+    return { app, server, io, stanze, stanzaDi };
+}
 
-    socket.on('leave_lobby', () => {
-        if(giocatoriConnessi[socket.id]) gestisciUscitaGiocatore(socket.id);
-    });
+module.exports = { creaServer, caricaParole, scegliCarta, assegnaRuoli, pulisciNome, pulisciCodice, pulisciModalita, idGiocatoreValido, generaNomeCasuale };
 
-    socket.on('disconnect', () => {
-        gestisciUscitaGiocatore(socket.id);
+if (require.main === module) {
+    const { server } = creaServer();
+    const PORT = process.env.PORT || 3000;
+    server.listen(PORT, () => {
+        console.log(`SERVER ATTIVO! Porta ${PORT}`);
     });
-});
-
-const PORT = process.env.PORT || 3000; 
-server.listen(PORT, () => {
-    console.log(`SERVER ATTIVO! Porta ${PORT}`);
-});
+}
