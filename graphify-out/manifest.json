@@ -1,0 +1,92 @@
+{
+  "package.json": {
+    "mtime": 1794425738.0334916,
+    "seen": 1794426066.0593307,
+    "ast_hash": "bb7e6119c80ea8dec26ed03236ba4716",
+    "semantic_hash": ""
+  },
+  "public/manifest.json": {
+    "mtime": 1763547647.0,
+    "seen": 1794424787.453172,
+    "ast_hash": "dfea47d156e09d1e8e95fe714d10b846",
+    "semantic_hash": "dfea47d156e09d1e8e95fe714d10b846"
+  },
+  "public/service-worker.js": {
+    "mtime": 1794425633.2708287,
+    "seen": 1794426066.0593386,
+    "ast_hash": "a956f66a6c8a7e8ec42c7785ac116b53",
+    "semantic_hash": ""
+  },
+  "server.js": {
+    "mtime": 1794425552.659408,
+    "seen": 1794426066.0593405,
+    "ast_hash": "7d3f664057d96037beeb507f2de3a077",
+    "semantic_hash": ""
+  },
+  "words.json": {
+    "mtime": 1794425951.6697152,
+    "seen": 1794426066.0593462,
+    "ast_hash": "12f559a9f372f5445d26d0d390bfc5b8",
+    "semantic_hash": ""
+  },
+  "words_clash.json": {
+    "mtime": 1794426027.4422228,
+    "seen": 1794426066.0593479,
+    "ast_hash": "0e7759996fe8f85d2beae3056b448c69",
+    "semantic_hash": ""
+  },
+  "index.html": {
+    "mtime": 1794425816.6335318,
+    "seen": 1794426066.05935,
+    "ast_hash": "2ca8f34d9366e3764266511e7d20e857",
+    "semantic_hash": ""
+  },
+  "public/icon-192.png": {
+    "mtime": 1763509588.0,
+    "seen": 1794424787.4531825,
+    "ast_hash": "2537f42b89b1fb4602a6945324ca0dc9",
+    "semantic_hash": "2537f42b89b1fb4602a6945324ca0dc9"
+  },
+  "public/icon-512.png": {
+    "mtime": 1763509649.0,
+    "seen": 1794424787.4531837,
+    "ast_hash": "67fa7c8b8e91da6a480565f63d7f0fd9",
+    "semantic_hash": "67fa7c8b8e91da6a480565f63d7f0fd9"
+  },
+  "public/logo_detective.png": {
+    "mtime": 1763501667.0,
+    "seen": 1794424787.4531853,
+    "ast_hash": "32111ae7dae008c14df5952853526a72",
+    "semantic_hash": "32111ae7dae008c14df5952853526a72"
+  },
+  "public/logo_imposter.png": {
+    "mtime": 1763503266.0,
+    "seen": 1794424787.4531865,
+    "ast_hash": "6c11b3cbfd985d8c602806166df3007e",
+    "semantic_hash": "6c11b3cbfd985d8c602806166df3007e"
+  },
+  "public/logo_infiltrato.png": {
+    "mtime": 1763505323.0,
+    "seen": 1794424787.4531882,
+    "ast_hash": "855780da4f92b2d3d2253157167d3cd7",
+    "semantic_hash": "855780da4f92b2d3d2253157167d3cd7"
+  },
+  ".claude/launch.json": {
+    "mtime": 1794425749.170327,
+    "seen": 1794426066.0593228,
+    "ast_hash": "ac4d629de82800d7a90a669e68a14ca1",
+    "semantic_hash": ""
+  },
+  "test/parole.test.js": {
+    "mtime": 1794426049.7032688,
+    "seen": 1794426066.0593426,
+    "ast_hash": "6aa918375fcbdfae7dd85916f7b0552c",
+    "semantic_hash": ""
+  },
+  "test/server.test.js": {
+    "mtime": 1794425729.5168345,
+    "seen": 1794426066.059344,
+    "ast_hash": "386effa236d365997246298ee518904f",
+    "semantic_hash": ""
+  }
+}

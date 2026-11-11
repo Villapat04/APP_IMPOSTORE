@@ -1,0 +1,74 @@
+{
+  "package.json": {
+    "mtime": 1763551245.0,
+    "seen": 1794424787.453164,
+    "ast_hash": "27605025b435171b7e3dbb052f2b312b",
+    "semantic_hash": "27605025b435171b7e3dbb052f2b312b"
+  },
+  "public/manifest.json": {
+    "mtime": 1763547647.0,
+    "seen": 1794424787.453172,
+    "ast_hash": "dfea47d156e09d1e8e95fe714d10b846",
+    "semantic_hash": "dfea47d156e09d1e8e95fe714d10b846"
+  },
+  "public/service-worker.js": {
+    "mtime": 1763509835.0,
+    "seen": 1794424787.4531748,
+    "ast_hash": "8410a98acbfd62d114710ab91a7b3f12",
+    "semantic_hash": "8410a98acbfd62d114710ab91a7b3f12"
+  },
+  "server.js": {
+    "mtime": 1763985927.0,
+    "seen": 1794424787.4531763,
+    "ast_hash": "f701492c3e10e149141db3139b703ecb",
+    "semantic_hash": "f701492c3e10e149141db3139b703ecb"
+  },
+  "words.json": {
+    "mtime": 1763987231.0,
+    "seen": 1794424787.453178,
+    "ast_hash": "6e6727e47d2dcffb5d384f6592e10e2e",
+    "semantic_hash": "6e6727e47d2dcffb5d384f6592e10e2e"
+  },
+  "words_clash.json": {
+    "mtime": 1763987219.0,
+    "seen": 1794424787.4531794,
+    "ast_hash": "909763d46e45ba85892ef71c99d44c3b",
+    "semantic_hash": "909763d46e45ba85892ef71c99d44c3b"
+  },
+  "index.html": {
+    "mtime": 1763987408.0,
+    "seen": 1794424787.453181,
+    "ast_hash": "cd1f67be83a76972c87f1b008d0b3cf5",
+    "semantic_hash": "cd1f67be83a76972c87f1b008d0b3cf5"
+  },
+  "public/icon-192.png": {
+    "mtime": 1763509588.0,
+    "seen": 1794424787.4531825,
+    "ast_hash": "2537f42b89b1fb4602a6945324ca0dc9",
+    "semantic_hash": "2537f42b89b1fb4602a6945324ca0dc9"
+  },
+  "public/icon-512.png": {
+    "mtime": 1763509649.0,
+    "seen": 1794424787.4531837,
+    "ast_hash": "67fa7c8b8e91da6a480565f63d7f0fd9",
+    "semantic_hash": "67fa7c8b8e91da6a480565f63d7f0fd9"
+  },
+  "public/logo_detective.png": {
+    "mtime": 1763501667.0,
+    "seen": 1794424787.4531853,
+    "ast_hash": "32111ae7dae008c14df5952853526a72",
+    "semantic_hash": "32111ae7dae008c14df5952853526a72"
+  },
+  "public/logo_imposter.png": {
+    "mtime": 1763503266.0,
+    "seen": 1794424787.4531865,
+    "ast_hash": "6c11b3cbfd985d8c602806166df3007e",
+    "semantic_hash": "6c11b3cbfd985d8c602806166df3007e"
+  },
+  "public/logo_infiltrato.png": {
+    "mtime": 1763505323.0,
+    "seen": 1794424787.4531882,
+    "ast_hash": "855780da4f92b2d3d2253157167d3cd7",
+    "semantic_hash": "855780da4f92b2d3d2253157167d3cd7"
+  }
+}
